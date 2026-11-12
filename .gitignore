@@ -1,0 +1,29 @@
+# 발표자료·논문 PDF (저장소에 올리지 않음)
+*.pptx
+*.pdf
+~$*
+
+# PhysicalAI-AV에서 나온 이미지·마스크·결과물 (라이선스상 재배포 금지)
+gsam_results/
+data/
+out_*/
+*.jpg
+*.png
+*.npz
+*.parquet
+
+# 학습 산출물
+ckpt/
+logs/
+runs/
+*.pt
+*.safetensors
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+.DS_Store
+.claude/
