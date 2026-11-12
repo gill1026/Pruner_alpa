@@ -1,5 +1,5 @@
 # ReconPruner training config. "paper" = stated in FastDriveVLA (arXiv:2507.23318), "ours" = our choice.
-name: recon_v1
+name: recon_qwen_v1
 
 paths:
   data_dir: ~/gil/data                        # masking output (index.jsonl, windows/)
@@ -15,9 +15,11 @@ data:
 
 model:
   pruner_init: llm_layer0   # ours: llm_layer0 | random
-  decoder_width: 768        # ours
+  decoder_type: qwen        # qwen = paper-style (Qwen3-VL decoder layers at LLM width 2048) | light = ViT-style
+  decoder_init: llm_layers  # ours, qwen only: llm_layers (Alpamayo LLM layers 1..depth) | random
   decoder_depth: 6          # paper: 6 layers
-  decoder_heads: 12         # ours
+  decoder_width: 768        # ours, light only
+  decoder_heads: 12         # ours, light only
 
 loss:
   alpha: 0.5    # paper
@@ -27,7 +29,8 @@ train:
   epochs: 10            # paper
   batch_windows: 4      # ours: windows per step (x24 images)
   lr_pruner: 2.0e-5     # paper
-  lr_decoder: 1.0e-4    # ours: decoder is trained from scratch, unlike the paper's pretrained layers
+  lr_decoder_pretrained: 2.0e-5   # paper lr, for decoder layers that start from LLM weights
+  lr_new: 1.0e-4        # ours: randomly initialized parts (decoder head/positions, or a from-scratch decoder)
   weight_decay: 0.01    # ours
   warmup_steps: 100     # ours
   grad_clip: 1.0        # ours

@@ -27,6 +27,7 @@ def main():
     ap.add_argument("--frames", type=int, default=4)
     ap.add_argument("--height", type=int, default=320)
     ap.add_argument("--width", type=int, default=576)
+    ap.add_argument("--decoder_layers", type=int, default=6, help="also save LLM layers 1..N")
     ap.add_argument("--out", default=H("~/gil/parts/alpamayo_parts.pt"))
     a = ap.parse_args()
 
@@ -64,12 +65,17 @@ def main():
     vis = {k[len("vlm.model.visual."):]: v for k, v in sd.items() if k.startswith("vlm.model.visual.")}
     l0p = "vlm.model.language_model.layers.0."
     layer0 = {k[len(l0p):]: v for k, v in sd.items() if k.startswith(l0p)}
+    # layers 1..N: optional init for the paper-style reconstruction decoder
+    llm_layers = {}
+    for i in range(1, a.decoder_layers + 1):
+        p = f"vlm.model.language_model.layers.{i}."
+        llm_layers[i] = {k[len(p):]: v for k, v in sd.items() if k.startswith(p)}
     emb = sd["vlm.model.language_model.embed_tokens.weight"][ids].clone()
     emb[is_img] = 0
 
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     torch.save(dict(
-        visual_state=vis, layer0_state=layer0, vision_config=vlm_cfg["vision_config"], text_config=vlm_cfg["text_config"],
+        visual_state=vis, layer0_state=layer0, llm_layers_state=llm_layers, vision_config=vlm_cfg["vision_config"], text_config=vlm_cfg["text_config"],
         prefix_ids=ids, pos_ids=pos, img_idx=torch.nonzero(is_img)[:, 0], text_embeds=emb,
         cams=cams.tolist(), frames=a.frames, height=a.height, width=a.width, tok_per_img=tok_per_img,
         grid_hw=[a.height // 32, a.width // 32], min_pixels=t_cfg["min_pixels"], max_pixels=t_cfg["max_pixels"],

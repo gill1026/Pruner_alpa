@@ -15,7 +15,7 @@ from .data import WindowDataset, load_exclude, load_index, split_windows
 from .encoder import FrozenEncoder
 from .losses import total_loss
 from .metrics import SelectionMetrics
-from .model import ReconDecoder, ReconPruner, check_full_attention, ste_mask
+from .model import ReconPruner, build_decoder, check_full_attention, decoder_param_groups, ste_mask
 
 H = os.path.expanduser
 
@@ -104,12 +104,14 @@ def main():
     enc = FrozenEncoder(parts, P["processor_dir"], dev)
     pruner = ReconPruner(parts, cfg["model"]["pruner_init"]).to(dev)
     d = parts["text_config"]["hidden_size"]
-    decoder = ReconDecoder(d, grid_hw, cfg["model"]["decoder_width"], cfg["model"]["decoder_depth"],
-                           cfg["model"]["decoder_heads"]).to(dev)
+    decoder = build_decoder(cfg["model"], parts).to(dev)
     check_full_attention(pruner, len(parts["img_idx"]), d, dev)
 
-    opt = torch.optim.AdamW([{"params": pruner.parameters(), "lr": T["lr_pruner"]},
-                             {"params": decoder.parameters(), "lr": T["lr_decoder"]}], weight_decay=T["weight_decay"])
+    dec_pre, dec_new = decoder_param_groups(decoder)
+    groups = [{"params": pruner.parameters(), "lr": T["lr_pruner"]}, {"params": dec_new, "lr": T["lr_new"]}]
+    if dec_pre:
+        groups.append({"params": dec_pre, "lr": T["lr_decoder_pretrained"]})
+    opt = torch.optim.AdamW(groups, weight_decay=T["weight_decay"])
     steps_per_epoch = len(train_dl)
     total = T["epochs"] * steps_per_epoch
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda st: min(1.0, (st + 1) / T["warmup_steps"]) * 0.5 * (
@@ -125,7 +127,8 @@ def main():
 
     npar = lambda m: sum(p.numel() for p in m.parameters()) / 1e6
     print(f"run {run}\ntrain windows {len(train_rows)}, val windows {len(val_rows)}, excluded images {len(excl)}\n"
-          f"pruner {npar(pruner):.1f}M params, decoder {npar(decoder):.1f}M params\n"
+          f"pruner {npar(pruner):.1f}M params, decoder {npar(decoder):.1f}M params "
+          f"({cfg['model'].get('decoder_type')}, pretrained tensors {len(dec_pre)}, new tensors {len(dec_new)})\n"
           f"steps/epoch {steps_per_epoch}, total steps {total}", flush=True)
     json.dump(cfg, open(os.path.join(run, "config.json"), "w"), indent=1)
     logf = open(os.path.join(run, "log.jsonl"), "a")

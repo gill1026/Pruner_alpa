@@ -80,6 +80,67 @@ class ReconDecoder(nn.Module):
         return x.reshape(n, 3, gh * p, gw * p)
 
 
+class QwenReconDecoder(nn.Module):
+    """Paper-style decoder: `depth` Qwen3-VL decoder layers at the LLM width + a feedforward head.
+
+    The paper uses six Qwen2.5-VL-3B decoder layers; position handling and the head are not
+    specified, so we use 2D MRoPE (row, col) plus a learnable absolute embedding and a linear patch head.
+    """
+
+    def __init__(self, parts, grid_hw, depth=6, patch=32, init="llm_layers"):
+        super().__init__()
+        cfg = Qwen3VLTextConfig(**parts["text_config"])
+        cfg._attn_implementation = "sdpa"
+        d = cfg.hidden_size
+        self.grid_hw, self.patch = grid_hw, patch
+        self.layers = nn.ModuleList([Qwen3VLTextDecoderLayer(cfg, i) for i in range(depth)])
+        self.pretrained = init == "llm_layers"
+        if self.pretrained:  # ours: start from Alpamayo LLM layers 1..depth (layer 0 is the PrunerLayer init)
+            for i, layer in enumerate(self.layers):
+                layer.load_state_dict({k: v.float() for k, v in parts["llm_layers_state"][i + 1].items()}, strict=True)
+        elif init != "random":
+            raise ValueError(init)
+        self.rotary = Qwen3VLTextRotaryEmbedding(cfg)
+        self.pos = nn.Parameter(torch.zeros(1, grid_hw[0] * grid_hw[1], d))
+        nn.init.trunc_normal_(self.pos, std=0.02)
+        self.norm = nn.LayerNorm(d)
+        self.head = nn.Linear(d, patch * patch * 3)
+        rows = torch.arange(grid_hw[0]).repeat_interleave(grid_hw[1])
+        cols = torch.arange(grid_hw[1]).repeat(grid_hw[0])
+        self.register_buffer("pos_ids", torch.stack([torch.zeros_like(rows), rows, cols]), persistent=False)
+
+    def forward(self, tokens):
+        n, t, _ = tokens.shape
+        x = tokens + self.pos.to(tokens.dtype)
+        cos_sin = self.rotary(x, self.pos_ids.unsqueeze(1).expand(-1, n, -1))
+        mask = torch.zeros(1, 1, 1, t, device=x.device, dtype=x.dtype)  # full attention
+        for layer in self.layers:
+            x = layer(x, position_embeddings=cos_sin, attention_mask=mask)
+            x = x[0] if isinstance(x, tuple) else x
+        x = self.head(self.norm(x))
+        (gh, gw), p = self.grid_hw, self.patch
+        x = x.reshape(n, gh, gw, p, p, 3).permute(0, 5, 1, 3, 2, 4)
+        return x.reshape(n, 3, gh * p, gw * p)
+
+
+def build_decoder(cfg_model, parts):
+    kind = cfg_model.get("decoder_type", "light")
+    if kind == "qwen":
+        return QwenReconDecoder(parts, parts["grid_hw"], cfg_model["decoder_depth"],
+                                init=cfg_model.get("decoder_init", "llm_layers"))
+    if kind == "light":
+        return ReconDecoder(parts["text_config"]["hidden_size"], parts["grid_hw"], cfg_model["decoder_width"],
+                            cfg_model["decoder_depth"], cfg_model["decoder_heads"])
+    raise ValueError(kind)
+
+
+def decoder_param_groups(decoder):
+    """(pretrained params, newly initialized params): they get different learning rates."""
+    pre = list(decoder.layers.parameters()) if getattr(decoder, "pretrained", False) else []
+    ids = {id(p) for p in pre}
+    return pre, [p for p in decoder.parameters() if id(p) not in ids]
+
+
 @torch.no_grad()
 def check_full_attention(pruner, n_tokens, dim, device):
     """Changing the last visual token must change the score of the first one (non-causal)."""
