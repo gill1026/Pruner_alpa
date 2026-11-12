@@ -1,0 +1,37 @@
+# ReconPruner training config. "paper" = stated in FastDriveVLA (arXiv:2507.23318), "ours" = our choice.
+name: recon_v1
+
+paths:
+  data_dir: ~/gil/data                        # masking output (index.jsonl, windows/)
+  parts: ~/gil/parts/alpamayo_parts.pt        # from pruner/extract_parts.py
+  processor_dir: ~/alpamayo/cosmos2b          # Qwen3-VL image processor config
+  out_dir: ~/gil/runs
+
+data:
+  val_frac: 0.1          # ours: clip-level split of the training candidates
+  split_seed: 0
+  exclude: exclude_noroad.jsonl   # images skipped in the loss (still fed to the Pruner)
+  num_workers: 6
+
+model:
+  pruner_init: llm_layer0   # ours: llm_layer0 | random
+  decoder_width: 768        # ours
+  decoder_depth: 6          # paper: 6 layers
+  decoder_heads: 12         # ours
+
+loss:
+  alpha: 0.5    # paper
+  lam: 0.2      # paper: SSIM weight
+
+train:
+  epochs: 10            # paper
+  batch_windows: 4      # ours: windows per step (x24 images)
+  lr_pruner: 2.0e-5     # paper
+  lr_decoder: 1.0e-4    # ours: decoder is trained from scratch, unlike the paper's pretrained layers
+  weight_decay: 0.01    # ours
+  warmup_steps: 100     # ours
+  grad_clip: 1.0        # ours
+  log_every: 20
+  val_every_epochs: 1
+  save_every_steps: 200
+  seed: 0

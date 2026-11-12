@@ -2,7 +2,7 @@
 
 소형 자율주행 VLA(Alpamayo)에 복원 기반 시각 토큰 프루너를 적용하고, 프루닝이 소형 객체 정보에 주는 영향을 분석하는 연구 코드입니다.
 
-> **현재 상태 (2026-11-12):** 마스킹 데이터 생성까지 끝났습니다. Pruner 학습 코드는 설계 단계이며 아직 작성하지 않았습니다. 학습 결과나 주행 평가 결과는 없습니다.
+> **현재 상태 (2026-11-12):** 마스킹 데이터 생성이 끝났고, Pruner 학습 코드는 20스텝 동작 확인까지 했습니다. 본 학습은 아직 돌리지 않았고, 학습 결과나 주행 평가 결과는 없습니다.
 
 ## 연구 질문
 
@@ -28,7 +28,7 @@
 | 단계 | 내용 | 상태 |
 |---|---|---|
 | 1 | Grounded-SAM 전경 마스킹 데이터 생성 | 완료 |
-| 2 | 복원 기반 Pruner 학습 | 설계 중 |
+| 2 | 복원 기반 Pruner 학습 | 코드 작성, 본 학습 전 |
 | 3 | 소형 객체 정보 손실·주행 오차 분석 | 예정 |
 | 4 | 탈락 토큰 복구 실험 | 예정 |
 
@@ -82,9 +82,33 @@ data/
 python masking/gsam_batch.py --out ~/gil/data
 ```
 
-## 2단계: Pruner 학습 (설계)
+## 2단계: Pruner 학습
 
 매 스텝 `이미지 → 고정 시각 인코더 → Pruner → 복원 디코더` 순서로 계산합니다.
+
+### 실행
+
+```bash
+# 1) Alpamayo 체크포인트에서 필요한 부품만 추출 (한 번만)
+python -m pruner.extract_parts
+# 2) 학습. 같은 명령을 다시 실행하면 last.pt에서 이어서 진행
+python -m pruner.train --config pruner/config.yaml
+```
+
+### 코드 (`pruner/`)
+
+| 파일 | 역할 |
+|---|---|
+| `extract_parts.py` | 체크포인트에서 시각 인코더, LLM 0번 층, 실제 프롬프트 앞부분(토큰·위치 ID·텍스트 embedding)을 추출 |
+| `encoder.py` | 고정 시각 인코더 (Qwen3-VL ViT + Spatial Merger) |
+| `model.py` | ReconPruner, STE 마스크, 복원 디코더 |
+| `losses.py` | SSIM + MSE 복원 손실 |
+| `data.py` | window 단위 데이터셋, clip 단위 분할, 제외 목록 |
+| `metrics.py` | 선택 비율, 전경 일치도, 객체 크기별 토큰 보존율 |
+| `train.py` | 학습·검증·체크포인트 |
+| `config.yaml` | 설정. 항목마다 논문 값인지 직접 정한 값인지 표시 |
+
+Pruner 입력은 실제 Alpamayo 프롬프트의 앞부분 전체입니다. 시스템 프롬프트, 카메라 이름·프레임 번호 텍스트, 이미지 24장의 시각 토큰이 들어가고, 점수는 시각 토큰에만 매깁니다.
 
 | 항목 | 설정 | 출처 |
 |---|---|---|
@@ -95,6 +119,7 @@ python masking/gsam_batch.py --out ~/gil/data
 | 학습 시 분할 | `S > 0` 기준, straight-through estimator | 논문 |
 | 손실 | `0.2·(1−SSIM) + 0.8·MSE`, 전경·배경 가중 0.5씩 | 논문 |
 | 학습 설정 | lr 2e-5, cosine, 10 epoch | 논문 |
+| 디코더 학습률 | 1e-4 (디코더를 처음부터 학습하므로 따로 둠) | 직접 정함 |
 | Pruner 범위 | window의 24장을 함께 봄 | 직접 정함 |
 | 위치 정보 | Alpamayo LLM이 쓰는 MRoPE 위치 ID를 그대로 사용 | 직접 정함 |
 | 복원 디코더 | 이미지별 복원, Transformer 6층, 토큰당 32×32 패치 출력 | 층 수만 논문, 나머지는 직접 정함 |
